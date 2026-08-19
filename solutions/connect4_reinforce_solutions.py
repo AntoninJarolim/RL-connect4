@@ -523,8 +523,10 @@ def play_games(net, n_games, opponent_fn, gamma, choose_action=None):
 # log-probabilities.
 #
 # **Hint:** lecture slide *"Stochastic policy: $a_t \sim \pi_\theta(\cdot \mid s_t)$"*.
-# `Categorical(logits=...)` applies the softmax for you; `dist.sample()` and
-# `dist.log_prob(actions)` do all the work.
+# The first example in the PyTorch distributions docs is exactly this REINFORCE sampling
+# step: https://docs.pytorch.org/docs/2.13/distributions.html
+# One difference: we already have (masked) **logits**, not probabilities — build the
+# distribution with `Categorical(logits=...)` and you need no softmax at all.
 
 # %%
 # TODO-CELL

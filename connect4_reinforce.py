@@ -525,17 +525,18 @@ def play_games(net, n_games, opponent_fn, gamma, choose_action=None):
 # log-probabilities.
 #
 # **Hint:** lecture slide *"Stochastic policy: $a_t \sim \pi_\theta(\cdot \mid s_t)$"*.
-# `Categorical(logits=...)` applies the softmax for you; `dist.sample()` and
-# `dist.log_prob(actions)` do all the work.
+# The first example in the PyTorch distributions docs is exactly this REINFORCE sampling
+# step: https://docs.pytorch.org/docs/2.13/distributions.html
+# One difference: we already have (masked) **logits**, not probabilities — build the
+# distribution with `Categorical(logits=...)` and you need no softmax at all.
 
 # %%
 # TODO-CELL
 def sample_action(masked_logits):
     """a ~ pi_theta(.|s): sample a column per board. Returns (actions, log_probs)."""
-    # TODO 2:
-    #   1. dist = Categorical(logits=...)   (already imported)
-    #   2. sample one action per board
-    #   3. return the actions and dist.log_prob(actions)
+    # TODO 2: follow the REINFORCE example at the top of
+    # https://docs.pytorch.org/docs/2.13/distributions.html
+    # (one difference: we have masked LOGITS, so build Categorical(logits=...))
     raise NotImplementedError("TODO 2: sample from the policy")
 
 # %% [markdown]

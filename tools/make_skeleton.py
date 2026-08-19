@@ -38,10 +38,9 @@ class PolicyNet(nn.Module):
 # TODO-CELL
 def sample_action(masked_logits):
     """a ~ pi_theta(.|s): sample a column per board. Returns (actions, log_probs)."""
-    # TODO 2:
-    #   1. dist = Categorical(logits=...)   (already imported)
-    #   2. sample one action per board
-    #   3. return the actions and dist.log_prob(actions)
+    # TODO 2: follow the REINFORCE example at the top of
+    # https://docs.pytorch.org/docs/2.13/distributions.html
+    # (one difference: we have masked LOGITS, so build Categorical(logits=...))
     raise NotImplementedError("TODO 2: sample from the policy")
 
 ''',
