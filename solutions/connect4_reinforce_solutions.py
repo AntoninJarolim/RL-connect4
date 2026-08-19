@@ -703,7 +703,8 @@ def train(net, opponent_fn, n_updates, n_games=N_GAMES, lr=LEARNING_RATE,
         history["win_rate"].append((batch.z > 0).float().mean().item())
         history["game_len"].append(batch.game_plies.float().mean().item())
         history["loss"].append(loss.item())
-        if show_plot and (update + 1) % PLOT_EVERY == 0:
+        is_last = update + 1 == n_updates
+        if show_plot and ((update + 1) % PLOT_EVERY == 0 or is_last):
             update_live_plot(history)
     return history
 
@@ -715,10 +716,6 @@ t0 = time.time()
 history = train(net, random_opponent, N_UPDATES, use_baseline=USE_BASELINE)
 print(f"Trained {N_UPDATES} updates in {time.time() - t0:.0f} s. "
       f"Win rate over the last 10 updates: {np.mean(history['win_rate'][-10:]):.2f}")
-
-# %%
-plot_curves({"per batch": history["win_rate"], "smoothed": smoothed(history["win_rate"])},
-            ylabel="win rate vs random", target=0.9, title="REINFORCE vs the random opponent")
 
 # %% [markdown]
 # ## 6. Play against your agent
