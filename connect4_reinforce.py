@@ -17,8 +17,6 @@
 # algorithm from the lecture. You write 4 small pieces of code (**TODO 1–4**); everything
 # else is given. Each TODO is followed by a ✅ check cell that tells you if your code is
 # correct. At the end, you play against your own agent.
-#
-# Suggested time: TODO 1 ≈ 10 min · TODO 2 ≈ 10 min · TODO 3 ≈ 5 min · training ≈ 5 min · TODO 4 + play ≈ 10 min.
 
 # %% [markdown]
 # ## 0. Setup
@@ -59,9 +57,9 @@ print(f"torch {torch.__version__} | {device} available — but everything runs o
 # | `a = dist.sample()` | $a_t \sim \pi_\theta(\cdot \mid s_t)$ | action selection during **training** |
 # | `greedy_action(...)` | $\arg\max_a \pi_\theta(a \mid s)$ | action selection at **inference** time |
 # | `G` | $G(\tau_{t:}) = \sum_k \gamma^k\, r_{t+k+1}$ | discounted return; here the only reward is the final $z \in \{-1, 0, +1\}$ |
-# | `gamma` | $\gamma$ | discount factor, `1.0` in the main path |
-# | the net's weights | $\theta$ (green) | parameters of the policy |
-# | (bonus) baseline | previews $V_\varphi$, $\varphi$ (red) | actor-critic teaser |
+# | `gamma` | $\gamma$ | discount factor; `1.0` everywhere in this notebook |
+# | the net's weights | $\theta$ | parameters of the policy |
+# | (bonus) baseline | previews $V_\varphi$ | actor-critic teaser |
 #
 # Connect 4 is **fully observed**: the board is the whole state, $o_t = s_t$.
 # So we simply write $s$ everywhere.
@@ -79,6 +77,9 @@ print(f"torch {torch.__version__} | {device} available — but everything runs o
 # - **state $s$** — the board: a `(2, 6, 7)` tensor. Channel 0 holds the discs of the
 #   player *to move*, channel 1 the opponent's discs. After every move the channels swap,
 #   so the network always sees the game from the current player's side.
+#   (Why one 0/1 plane per player instead of a single 6×7 grid with +1/−1 values? Binary
+#   planes let the conv layers learn separate filters for "my disc here" and "their disc
+#   here", with no fake arithmetic between the two. AlphaZero encodes boards the same way.)
 # - **actions $a$** — the 7 columns. A column is legal **iff its top cell is free**.
 #   (That is the only legality rule in Connect 4.)
 # - **transitions $P$** — `step(actions)` drops the discs and flips the board to the
@@ -100,6 +101,8 @@ print(f"torch {torch.__version__} | {device} available — but everything runs o
 # - `render_board(board, channel0_player)` — pretty-prints one board.
 # - `read_human_move(legal)` — asks you for a column (used in Section 6).
 # - `smoothed(values)` — moving average, for readable curves.
+# - `plot_action_probs(net, board, title)` — bar chart of $\pi_\theta(\cdot \mid s)$ for one board.
+# - `find_win_in_one_position(net)` — fishes a "one move from winning" board out of the agent's own games.
 # - `update_live_plot(history)` / `plot_curves(curves)` — plotting plumbing.
 
 # %%
@@ -175,6 +178,44 @@ def plot_curves(curves, ylabel, target=None, title=""):
     plt.show()
 
 
+def plot_action_probs(net, board, title):
+    """Bar chart of pi_theta(a|s) for one (1, 2, 6, 7) board."""
+    probs = torch.softmax(net(board, legal_move_mask(board)), dim=1)[0].detach()
+    plt.figure(figsize=(5, 2.5))
+    plt.bar(range(7), probs)
+    plt.ylim(0, 1)
+    plt.xlabel("column $a$")
+    plt.ylabel(r"$\pi_\theta(a \mid s)$")
+    plt.title(title)
+    plt.show()
+
+
+@torch.no_grad()
+def find_win_in_one_position(net, n_games=64):
+    """From the agent's own greedy games vs random: the board one move before the agent
+    won, and the winning column it played. Prefers wins outside the center column."""
+    env = VectorConnect4(n_games)
+    last_board = torch.zeros(n_games, 2, 6, 7)
+    last_move = torch.zeros(n_games, dtype=torch.int64)
+    while env.active.any():
+        actions = torch.zeros(n_games, dtype=torch.int64)
+        legal = env.legal_mask()
+        opp_turn = env.active & (env.current_player == 1)   # the agent moves first here
+        agent_turn = env.active & (env.current_player == 0)
+        if opp_turn.any():
+            actions[opp_turn] = random_opponent(env.board[opp_turn], legal[opp_turn])
+        if agent_turn.any():
+            a = greedy_action(net, env.board[agent_turn])
+            actions[agent_turn] = a
+            last_board[agent_turn] = env.board[agent_turn]
+            last_move[agent_turn] = a
+        env.step(actions)
+    won = [int(i) for i in torch.where(env.z(0) > 0)[0]]
+    off_center = [i for i in won if int(last_move[i]) != 3]
+    pick = (off_center or won)[0]
+    return last_board[pick:pick + 1], int(last_move[pick])
+
+
 def update_live_plot(history, target=0.9):
     """Redraw the training curve in place (plain prints when running headless)."""
     n, wr = len(history["win_rate"]), history["win_rate"]
@@ -209,9 +250,9 @@ class VectorConnect4:
         self.n = n_games
         self.board = torch.zeros(n_games, 2, 6, 7)
         self.active = torch.ones(n_games, dtype=torch.bool)
-        self.winner = torch.full((n_games,), -1, dtype=torch.long)  # 0 / 1, or -1 = draw
-        self.game_plies = torch.zeros(n_games, dtype=torch.long)    # length of finished games
-        self.channel0_player = torch.zeros(n_games, dtype=torch.long)
+        self.winner = torch.full((n_games,), -1, dtype=torch.int64)  # 0 / 1, or -1 = draw
+        self.game_plies = torch.zeros(n_games, dtype=torch.int64)    # length of finished games
+        self.channel0_player = torch.zeros(n_games, dtype=torch.int64)
         self.ply = 0  # all games move in lockstep, so one global move counter is enough
 
     @property
@@ -224,28 +265,35 @@ class VectorConnect4:
         return legal_move_mask(self.board)
 
     def step(self, actions):
-        """Play one move in every active game (finished games ignore their action)."""
-        idx = torch.where(self.active)[0]
-        cols = actions[idx]
+        """Play one move in every active game.
+
+        actions: (N,) int64 tensor — one column index per game.
+        Finished games ignore their entry.
+        """
+        idx = torch.where(self.active)[0]                           # (k,) active game indices
+        cols = actions[idx]                                         # (k,) their chosen columns
 
         # Gravity: the disc falls to the lowest empty cell of the chosen column.
         filled = self.board[idx].sum(dim=(1, 2))                    # (k, 7) discs per column
-        rows = (5 - filled[torch.arange(len(idx)), cols]).long()
+        chosen_fill = filled[torch.arange(len(idx)), cols]          # for game j: discs in cols[j]
+        rows = (5 - chosen_fill).to(torch.int64)                    # row 5 = bottom, row 0 = top
         assert (rows >= 0).all(), "illegal move: a chosen column is already full"
         self.board[idx, 0, rows, cols] = 1.0                        # channel 0 = player to move
 
         # Did this move end the game? (win for the mover, or a full board = draw)
         won = check_four_in_a_row(self.board[idx, 0])
-        full = self.board[idx].sum(dim=(1, 2, 3)) == 42
+        full = self.board[idx].sum(dim=(1, 2, 3)) == 42             # 6 rows x 7 cols, all filled
         self.winner[idx[won]] = self.current_player
         finished = idx[won | full]
         self.game_plies[finished] = self.ply + 1
         self.active[finished] = False
         self.ply += 1
 
-        # Flip channels in the games that continue: the next player becomes channel 0.
+        # It is the other player's turn now. Swap the two channels in every game that
+        # continues, so that channel 0 again holds the discs of the player to move —
+        # and remember which absolute player (0 or 1) channel 0 belongs to.
         still = torch.where(self.active)[0]
-        self.board[still] = self.board[still][:, [1, 0]]
+        self.board[still] = self.board[still][:, [1, 0]]            # swap channel 0 <-> channel 1
         self.channel0_player[still] = 1 - self.channel0_player[still]
 
     def z(self, player):
@@ -339,9 +387,10 @@ class ConvTrunk(nn.Module):
 # **What you write:** the last layer of the policy (128 features → 7 logits, one per
 # column) and the masking that gives illegal columns probability 0.
 #
-# **Hint:** lecture slide *"A policy is a distribution over actions"*. Use
-# `nn.Linear(128, 7)` for the head. To mask, set the logits of illegal columns to a huge
-# negative constant like `-1e9`, e.g. with `logits.masked_fill(~legal_mask, -1e9)`.
+# **Hint:** lecture slide *"A policy is a distribution over actions"*. The head is
+# `nn.Linear(number_of_features, number_of_columns)`. To mask, set the logits of illegal
+# columns to a huge negative constant like `-1e9` — look up `Tensor.masked_fill`, and
+# note that `legal_mask` marks the *legal* columns, not the illegal ones.
 # Return the masked logits — the softmax happens later, when we need probabilities.
 
 # %%
@@ -363,10 +412,12 @@ class PolicyNet(nn.Module):
         #   3. return the masked logits
         raise NotImplementedError("TODO 1: compute the masked logits")
 
-
 # %% [markdown]
-# The bar plot below is the notebook version of the "action probabilities" figure from
-# the policy slide — here for the empty board, under the untrained (random) policy.
+# The bar plots below are the notebook version of the "action probabilities" figure from
+# the policy slide. First the empty board, under the untrained (randomly initialized)
+# policy. Then a board where the player to move **wins immediately by playing column 0**
+# — the untrained policy has no idea. Remember this board: we will show it to the
+# network again after training.
 
 # %%
 set_seed(SEED)
@@ -374,13 +425,16 @@ demo_net = PolicyNet()
 print(f"PolicyNet has {sum(p.numel() for p in demo_net.parameters()):,} parameters (theta)")
 
 empty_board = torch.zeros(1, 2, 6, 7)
-probs = torch.softmax(demo_net(empty_board, legal_move_mask(empty_board)), dim=1)[0].detach()
-plt.figure(figsize=(5, 2.5))
-plt.bar(range(7), probs)
-plt.xlabel("column $a$")
-plt.ylabel(r"$\pi_\theta(a \mid s_{\mathrm{empty}})$")
-plt.title("Action probabilities on the empty board (untrained)")
-plt.show()
+plot_action_probs(demo_net, empty_board, "Untrained policy on the empty board")
+
+# A position where the player to move (X) wins at once by completing column 0:
+winning_board = torch.zeros(1, 2, 6, 7)
+winning_board[0, 0, 3:, 0] = 1.0                 # our three discs stacked in column 0
+winning_board[0, 1, 5, 4] = 1.0                  # three opponent discs, no threat
+winning_board[0, 1, 5, 5] = 1.0
+winning_board[0, 1, 4, 4] = 1.0
+render_board(winning_board[0], channel0_player=0)
+plot_action_probs(demo_net, winning_board, "Untrained policy — blind to the win in column 0")
 
 # %%
 set_seed(0)
@@ -422,25 +476,29 @@ def play_games(net, n_games, opponent_fn, gamma, choose_action=None):
     Defaults to sample_action, i.e. a ~ pi_theta (Section 7b tries an alternative).
     """
     env = VectorConnect4(n_games)
-    agent_player = torch.zeros(n_games, dtype=torch.long)
+    agent_player = torch.zeros(n_games, dtype=torch.int64)
     agent_player[n_games // 2:] = 1                     # second half: the opponent starts
-    moves_played = torch.zeros(n_games, dtype=torch.long)
+    moves_played = torch.zeros(n_games, dtype=torch.int64)
 
     boards_h, masks_h, actions_h, log_probs_h, game_idx_h, move_k_h = [], [], [], [], [], []
 
     while env.active.any():
-        actions = torch.zeros(n_games, dtype=torch.long)
+        actions = torch.zeros(n_games, dtype=torch.int64)
         legal = env.legal_mask()
-        agent_turn = env.active & (agent_player == env.current_player)
         opp_turn = env.active & (agent_player != env.current_player)
+        agent_turn = env.active & (agent_player == env.current_player)
 
+        # the opponent just plays...
+        if opp_turn.any():
+            actions[opp_turn] = opponent_fn(env.board[opp_turn], legal[opp_turn])
+
+        # ...while our moves also get recorded, for the gradient later
         if agent_turn.any():
             boards, masks = env.board[agent_turn], legal[agent_turn]
             masked_logits = net(boards, masks)
             act = choose_action if choose_action is not None else sample_action
             a, log_p = act(masked_logits)               # <- your TODO 2 (by default)
             actions[agent_turn] = a
-            # bookkeeping for the gradient later:
             boards_h.append(boards)
             masks_h.append(masks)
             actions_h.append(a)
@@ -448,9 +506,6 @@ def play_games(net, n_games, opponent_fn, gamma, choose_action=None):
             game_idx_h.append(torch.where(agent_turn)[0])
             move_k_h.append(moves_played[agent_turn].clone())
             moves_played[agent_turn] += 1
-
-        if opp_turn.any():
-            actions[opp_turn] = opponent_fn(env.board[opp_turn], legal[opp_turn])
 
         env.step(actions)
 
@@ -483,7 +538,6 @@ def sample_action(masked_logits):
     #   3. return the actions and dist.log_prob(actions)
     raise NotImplementedError("TODO 2: sample from the policy")
 
-
 # %% [markdown]
 # ### Returns: how good was each move?
 #
@@ -505,7 +559,7 @@ def compute_returns(move_index, moves_in_game, z, gamma):
 
 
 # %%
-FINGERPRINT_TODO2 = 270192  # pinned by the reference solution
+FINGERPRINT_TODO2 = 307207  # pinned by the reference solution
 
 set_seed(123)
 _net2 = PolicyNet()
@@ -566,7 +620,6 @@ def reinforce_loss(log_probs, G):
     # TODO 3: one line. Remember the minus sign.
     raise NotImplementedError("TODO 3: the REINFORCE loss")
 
-
 # %%
 _lp = torch.tensor([-1.0, -0.5, -2.0, -0.25])   # log-probs of 4 moves
 _G = torch.tensor([1.0, -1.0, 1.0, 0.0])        # their returns
@@ -586,8 +639,8 @@ print("✅ TODO 3 looks correct")
 # lot. The simplest choice: the batch mean, $G - \bar G$.
 #
 # This previews **actor-critic**: there, the baseline is a learned value network
-# $V_\varphi$ ($\varphi$, red on the slides) while the policy stays $\pi_\theta$
-# ($\theta$, green). Two networks, two jobs.
+# $V_\varphi$ with its own parameters $\varphi$, while the policy stays $\pi_\theta$.
+# Two networks, two jobs.
 #
 # **What you write:** return `G - G.mean()`, then set `USE_BASELINE = True`.
 
@@ -599,7 +652,6 @@ USE_BASELINE = False  # set to True once you implement advantage() below
 def advantage(G):
     """Bonus: G minus the batch-mean baseline."""
     raise NotImplementedError("Bonus TODO: return G minus its mean")
-
 
 # %%
 if USE_BASELINE:
@@ -692,7 +744,6 @@ def greedy_action(net, boards):
     # TODO 4: get the masked logits from the net, return the argmax column per board.
     raise NotImplementedError("TODO 4: the greedy action")
 
-
 # %%
 set_seed(0)
 _net4 = PolicyNet()
@@ -711,6 +762,28 @@ _a_trap = int(greedy_action(_net4, _trap)[0])
 assert _a_trap != _best and legal_move_mask(_trap)[0, _a_trap], \
     "your greedy action picked a FULL column — apply the legal mask before the argmax"
 print("✅ TODO 4 looks correct")
+
+# %% [markdown]
+# Before you play against it: what did the network actually learn? Nobody ever told it
+# what "four in a row" means — it only ever saw the final $z$ of whole games.
+#
+# Below are two boards where the player to move **wins immediately**. The first comes
+# from one of your agent's *own* games (the move before it won). The second is the
+# crafted board from Section 2 — a position your agent would never reach by itself.
+
+# %%
+own_board, win_col = find_win_in_one_position(net)
+render_board(own_board[0], channel0_player=0)
+plot_action_probs(net, own_board, f"Its own game — the winning move is column {win_col}")
+
+render_board(winning_board[0], channel0_player=0)
+plot_action_probs(net, winning_board, "The Section 2 board — the winning move is column 0")
+
+# %% [markdown]
+# On its own familiar ground, the policy is (almost) certain about the winning move. On
+# the unfamiliar board, it usually is not — it just wants its favorite column. The
+# network did not learn the *rule* "complete four in a row"; it learned a strong *habit*
+# that happens to beat this opponent. Keep that in mind in the next cell — and exploit it.
 
 # %% [markdown]
 # Your move. You are X and you start; type a column number, `q` quits.
@@ -751,17 +824,17 @@ else:
 def evaluate(net, opponent_fn, n_games=1000):
     """Win/draw/loss rates of the greedy agent against opponent_fn."""
     env = VectorConnect4(n_games)
-    agent_player = torch.zeros(n_games, dtype=torch.long)
+    agent_player = torch.zeros(n_games, dtype=torch.int64)
     agent_player[n_games // 2:] = 1
     while env.active.any():
-        actions = torch.zeros(n_games, dtype=torch.long)
+        actions = torch.zeros(n_games, dtype=torch.int64)
         legal = env.legal_mask()
-        agent_turn = env.active & (agent_player == env.current_player)
         opp_turn = env.active & (agent_player != env.current_player)
-        if agent_turn.any():
-            actions[agent_turn] = greedy_action(net, env.board[agent_turn])
+        agent_turn = env.active & (agent_player == env.current_player)
         if opp_turn.any():
             actions[opp_turn] = opponent_fn(env.board[opp_turn], legal[opp_turn])
+        if agent_turn.any():
+            actions[agent_turn] = greedy_action(net, env.board[agent_turn])
         env.step(actions)
     z = env.z(agent_player)
     return {"win": (z > 0).float().mean().item(),

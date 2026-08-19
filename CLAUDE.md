@@ -46,13 +46,17 @@ online/offline, on-policy/off-policy, replay buffers, policy gradients.
 ├── tests/
 │   └── test_env.py                # pytest, runs against code extracted from the notebook
 └── tools/
-    └── check_todo_delta.py        # verifies skeleton vs solutions differ ONLY in TODO cells
+    ├── check_todo_delta.py        # verifies skeleton vs solutions differ ONLY in TODO cells
+    └── make_skeleton.py           # regenerates the skeleton from the solutions file
 ```
 
 ## Workflow rules
 
 - **Never edit `.ipynb` by hand.** Edit the `.py` jupytext files, then regenerate:
   `jupytext --to ipynb connect4_reinforce.py` (same for solutions). Commit both.
+- **Never edit the skeleton by hand either.** Edit the SOLUTIONS `.py`, then run
+  `python tools/make_skeleton.py` — it copies the file and swaps the 5 TODO cell bodies
+  for the NotImplementedError versions (the skeleton bodies live inside that script).
 - Use percent format: `# %%` for code cells, `# %% [markdown]` for markdown cells.
 - Local dev on this machine: use `.venv/bin/python` (gitignored venv; system python has
   no torch). Always set `MPLBACKEND=Agg` when running the `.py` files as scripts —
@@ -83,9 +87,9 @@ Include this table as a markdown cell in Section 0 and use these names consisten
 | `a = dist.sample()` | a_t ∼ π_θ(·\|s_t) | training-time action selection |
 | `greedy_action(...)` | argmax_a π_θ(a\|s) | inference-time action selection |
 | `G` | G(τ_t:) = Σ γ^k r | discounted return; terminal-only reward z ∈ {−1,0,+1} |
-| `gamma` | γ | 1.0 in main path |
-| `theta` (policy params) | θ | green in slides |
-| (bonus) baseline | previews V_φ | φ, red in slides |
+| `gamma` | γ | 1.0 everywhere in the notebook |
+| `theta` (policy params) | θ | (no color coding — the slides dropped it) |
+| (bonus) baseline | previews V_φ | |
 
 Rewards are indexed r_{t+1} in the slides; keep markdown consistent with that.
 
@@ -148,7 +152,11 @@ Rewards are indexed r_{t+1} in the slides; keep markdown consistent with that.
 ### Section 2 — TODO 1: policy head + action masking (~10 min)
 - Given: `ConvTrunk`, 3 conv layers (32 ch) + Linear to 128 features, ~192k params total.
 - **TODO 1**: final `nn.Linear(128, 7)` + mask illegal logits to −1e9 before softmax.
-- Given after: bar-chart of the 7 action probabilities for the empty board.
+  The hint deliberately avoids copy-pasteable code (says
+  `nn.Linear(number_of_features, number_of_columns)` and points at `masked_fill` by name).
+- Given after: `plot_action_probs` bar charts for (a) the empty board and (b) the crafted
+  `winning_board` (three own discs stacked in column 0, win-in-one) — both under the
+  untrained policy. The winning board returns in Section 6.
 - **Assert cell**: shape `(N, 7)`; illegal-column probs exactly 0 on crafted near-full
   boards; rows sum to 1 (atol 1e-5).
 
@@ -158,8 +166,8 @@ Rewards are indexed r_{t+1} in the slides; keep markdown consistent with that.
 - **TODO 2** (two lines): `Categorical(logits=...)`, `.sample()`, `.log_prob(...)`.
 - Given after: `compute_returns`: G = γ^(moves after) · z. **Given, not a TODO.**
 - **Assert cell**: shapes; finite log-probs; sampled actions legal; log-probs match an
-  independent `log_softmax` computation; fixed-seed fingerprint **270192** (regenerate
-  together with tests/test_env.py if torch RNG ever changes).
+  independent `log_softmax` computation; fixed-seed fingerprint **307207** (regenerate
+  together with tests/test_env.py if torch RNG or the rollout loop ever changes).
 - Markdown box: "Where's the replay buffer?" (online + on-policy; DQN contrast;
   foreshadows 7a).
 
@@ -180,6 +188,12 @@ Rewards are indexed r_{t+1} in the slides; keep markdown consistent with that.
   inside via `legal_move_mask`; no softmax needed — say why).
 - **Assert cell**: equals independent argmax of masked logits; a board whose
   globally-best column is FULL still yields a legal action.
+- Given: two-board "what did it learn?" demo: `find_win_in_one_position` fishes a
+  win-in-one board out of the agent's OWN games (there the policy is near-certain about
+  the winning move — by construction) and contrasts it with the Section 2
+  `winning_board`, where the trained policy is BLIND (measured: it puts ~1.0 on its
+  center habit, ~0.0 on the winning column). Do not claim the trained policy recognizes
+  wins on arbitrary boards — it demonstrably does not; it learned a habit, not the rule.
 - Given: play-vs-agent `input()` cell (human = X, moves first; guarded for headless).
 - Given: `evaluate()` win/draw/loss vs (a) random, (b) center-first heuristic.
 - Markdown: blind-spot prompt (open three) + measured facts: >half of losses are

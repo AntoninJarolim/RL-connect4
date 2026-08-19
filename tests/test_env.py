@@ -26,7 +26,7 @@ DRAW_SEQUENCE = [0, 5, 2, 1, 6, 3, 1, 5, 0, 4, 3, 0, 3, 6, 6, 6, 4, 1, 0, 2, 3,
                  4, 1, 3, 5, 2, 6, 6, 0, 4, 3, 0, 5, 2, 2, 5, 1, 1, 2, 4, 4, 5]
 
 # Same value as FINGERPRINT_TODO2 in the notebook (pinned from the reference run).
-FINGERPRINT = 270192
+FINGERPRINT = 307207
 
 
 @pytest.fixture(scope="session")
