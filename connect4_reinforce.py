@@ -862,7 +862,7 @@ for name, opponent in [("random", random_opponent), ("center-first", center_firs
 # policy net like yours with explicit lookahead.
 
 # %% [markdown]
-# ## 7. Bonus experiments (given — run whatever fits into the remaining time)
+# ## 7. Bonus experiments
 #
 # ### 7a. Reuse each batch K times — how off-policy do we get?
 #
