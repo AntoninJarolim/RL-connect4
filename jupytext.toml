@@ -1,0 +1,5 @@
+# Pair every notebook with a .py file in the percent format.
+# Edit the .py files, then regenerate the .ipynb files:
+#   jupytext --to ipynb connect4_reinforce.py
+#   jupytext --to ipynb solutions/connect4_reinforce_solutions.py
+formats = "ipynb,py:percent"
