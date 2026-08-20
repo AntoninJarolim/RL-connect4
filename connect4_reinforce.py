@@ -50,13 +50,13 @@ print(f"torch {torch.__version__} | {device} available — but everything runs o
 #
 # The notebook uses the same names as the lecture slides:
 #
-# | in the notebook | on the slides | meaning |
-# |---|---|---|
+# | in the notebook | on the slides &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | meaning |
+# |---|--------------|---|
 # | `obs`, `boards` | $o_t = s_t$ | the board — the fully observed state |
 # | `logits` → `softmax` | $\pi_\theta(\cdot \mid s)$ | the policy: a distribution over the 7 columns |
 # | `a = dist.sample()` | $a_t \sim \pi_\theta(\cdot \mid s_t)$ | action selection during **training** |
 # | `greedy_action(...)` | $\arg\max_a \pi_\theta(a \mid s)$ | action selection at **inference** time |
-# | `G` | $G(\tau_{t:}) = \sum_k \gamma^k\, r_{t+k+1}$ | discounted return; here the only reward is the final $z \in \{-1, 0, +1\}$ |
+# | `G` | $G_t = G(\tau_{t:}) = \sum_k \gamma^k\, r_{t+k+1}$ | the discounted gain (return); here the only reward is the final $z \in \{-1, 0, +1\}$ |
 # | `gamma` | $\gamma$ | discount factor; `1.0` everywhere in this notebook |
 # | the net's weights | $\theta$ | parameters of the policy |
 # | (bonus) baseline | previews $V_\varphi$ | actor-critic teaser |
