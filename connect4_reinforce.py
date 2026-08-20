@@ -614,7 +614,7 @@ print("✅ TODO 2 looks correct")
 #
 # The policy gradient from the lecture:
 #
-# $$\nabla_\theta J = \mathbb{E}\big[\, G_t \, \nabla_\theta \log \pi_\theta(a_t \mid s_t) \,\big]$$
+# $$\nabla_\theta J = \mathbb{E}_{\,a_t \sim \pi_\theta(a_t \mid s_t)}\big[\, G_t \, \nabla_\theta \log \pi_\theta(a_t \mid s_t) \,\big]$$
 #
 # We want gradient **ascent** on $J$, and optimizers do **descent** — so we minimize
 #
