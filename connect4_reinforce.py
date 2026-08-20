@@ -801,11 +801,11 @@ plot_action_probs(net, winning_board, "The Section 2 board — the winning move 
 # that happens to beat this opponent. Keep that in mind in the next cell — and exploit it.
 
 # %% [markdown]
-# Your move. You are X and you start; type a column number, `q` quits.
+# Your move. The agent starts and plays X; you are O. Type a column number, `q` quits.
 
 # %%
 @torch.no_grad()
-def play_vs_agent(net, human_first=True):
+def play_vs_agent(net, human_first=False):
     """Play one game against the greedy agent, in the notebook."""
     env = VectorConnect4(1)
     human = 0 if human_first else 1
