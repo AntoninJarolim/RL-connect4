@@ -1014,15 +1014,17 @@ def train_with_reuse(reuse_k, n_updates, n_games=N_GAMES, lr=1e-3, seed=SEED):
     return win_rates, frac_outside_clip
 
 
-curve_k1, _ = train_with_reuse(reuse_k=1, n_updates=N_BONUS_UPDATES)
-print(f"K=1 done, final win rate {np.mean(curve_k1[-10:]):.2f}")
-curve_k5, drift_k5 = train_with_reuse(reuse_k=5, n_updates=N_BONUS_UPDATES)
-print(f"K=5 done, final win rate {np.mean(curve_k5[-10:]):.2f}")
+reuse_curves = {}
+for reuse_k in range(1, 6):
+    win_rates, frac_outside_clip = train_with_reuse(reuse_k=reuse_k, n_updates=N_BONUS_UPDATES)
+    label = "K = 1 (on-policy)" if reuse_k == 1 else f"K = {reuse_k}"
+    reuse_curves[label] = win_rates
+    print(f"K={reuse_k} done, final win rate {np.mean(win_rates[-10:]):.2f}")
 
-plot_curves({"K = 1 (on-policy)": smoothed(curve_k1), "K = 5 (stale reuse)": smoothed(curve_k5)},
+plot_curves({label: smoothed(curve) for label, curve in reuse_curves.items()},
             ylabel="win rate vs random", title="Reusing each batch K times")
 plt.figure(figsize=(5, 2.5))
-plt.bar(range(1, len(drift_k5) + 1), 100 * drift_k5)
+plt.bar(range(1, len(frac_outside_clip) + 1), 100 * frac_outside_clip)  # from the K = 5 run
 plt.xlabel("gradient step on the same batch")
 plt.ylabel("% outside PPO clip")
 plt.title("Moves whose importance ratio left [0.8, 1.2]")
