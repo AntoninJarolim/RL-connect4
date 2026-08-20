@@ -98,6 +98,7 @@ print(f"torch {torch.__version__} | {device} available — but everything runs o
 # - `set_seed(seed)` — makes runs reproducible.
 # - `legal_move_mask(boards) -> mask` — `(N, 7)` bool: which columns can be played.
 # - `check_four_in_a_row(planes) -> wins` — `(N,)` bool: does this player have 4 in a row.
+# - `wins_if_played(planes, fill) -> cols` — `(N, 7)` bool: dropping a disc here makes 4 (Section 7a).
 # - `render_board(board, channel0_player)` — pretty-prints one board.
 # - `read_human_move(legal)` — asks you for a column (used in Section 6).
 # - `smoothed(values)` — moving average, for readable curves.
@@ -130,6 +131,21 @@ def check_four_in_a_row(planes):
     """(N, 6, 7) planes with one player's discs -> (N,) bool: 4 in a row anywhere."""
     hits = F.conv2d(planes.unsqueeze(1), _WIN_KERNELS, padding=3)
     return (hits > 3.5).flatten(1).any(dim=1)
+
+
+def wins_if_played(planes, fill):
+    """(N, 6, 7) one player's discs + (N, 7) column fill -> (N, 7) bool:
+    would dropping a disc in this column complete four in a row?"""
+    wins = torch.zeros(planes.shape[0], 7, dtype=torch.bool)
+    for c in range(7):
+        legal = fill[:, c] < 6
+        if not legal.any():
+            continue
+        rows = (5 - fill[legal, c]).to(torch.int64)
+        test = planes[legal].clone()
+        test[torch.arange(len(rows)), rows, c] = 1.0
+        wins[legal, c] = check_four_in_a_row(test)
+    return wins
 
 
 def render_board(board, channel0_player):
@@ -216,7 +232,7 @@ def find_win_in_one_position(net, n_games=64):
     return last_board[pick:pick + 1], int(last_move[pick])
 
 
-def update_live_plot(history, target=0.9):
+def update_live_plot(history, target=0.9, ylabel="win rate vs random"):
     """Redraw the training curve in place (plain prints when running headless)."""
     n, wr = len(history["win_rate"]), history["win_rate"]
     if HEADLESS:
@@ -230,7 +246,7 @@ def update_live_plot(history, target=0.9):
     plt.axhline(target, color="gray", linestyle="--", linewidth=1)
     plt.ylim(0, 1)
     plt.xlabel("update")
-    plt.ylabel("win rate vs random")
+    plt.ylabel(ylabel)
     plt.legend(loc="lower right")
     plt.grid(alpha=0.3)
     plt.show()
@@ -590,7 +606,9 @@ print("✅ TODO 2 looks correct")
 # >
 # > On the lecture's four-way data map we sit at **online + on-policy**. DQN sits at
 # > online + **off**-policy — that is why *it* is allowed to keep a replay buffer.
-# > In Section 7a we will reuse batches anyway, and *measure* how off-policy we become.
+# > (There is an honest way for policy gradients to reuse old games: re-weight every
+# > sample by $\pi_{\text{now}}/\pi_{\text{old}}$ — importance sampling. Keeping that
+# > ratio close to 1 is the heart of **PPO**.)
 
 # %% [markdown]
 # ## 4. The REINFORCE loss
@@ -860,90 +878,90 @@ for name, opponent in [("random", random_opponent), ("center-first", center_firs
 # is almost deterministic and stops exploring. Remember this feeling: it is exactly the
 # gap that **search** fills. MCTS and AlphaZero (final part of the lecture) combine a
 # policy net like yours with explicit lookahead.
+#
+# (In Section 7a we hire exactly that hand-written rule as a new, stricter teacher —
+# and train an agent that is much harder to trap.)
 
 # %% [markdown]
 # ## 7. Bonus experiments
 #
-# ### 7a. Reuse each batch K times — how off-policy do we get?
+# ### 7a. A stronger teacher
 #
-# DQN keeps a replay buffer, so why can't we? Let's try. The function below is our
-# training loop with one change: each batch is used for `reuse_k` gradient steps before
-# being thrown away. For $k > 1$ the log-probabilities are recomputed under the *current*
-# $\theta$ — but the games were played by an *older* policy. The data is **stale**: we
-# are off-policy, without any correction.
+# Random is a weak teacher: it never punishes a missed block, and we just saw where that
+# leads. So let's train a **fresh** net against a much meaner — but still *fixed* —
+# teacher: **"win if you can, block if you must, otherwise play random"** (the 1-ply
+# rule from the blind-spot note; it beats the random player about 96% of the time).
 #
-# "How off-policy" is a measurable number: the **importance ratio**
-# $\pi_{\text{now}}(a \mid s)\,/\,\pi_{\text{data}}(a \mid s)$ from the importance-sampling
-# slide. For fresh on-policy data the ratio is exactly 1 — and the REINFORCE gradient
-# silently *assumes* it is 1. The code below tracks how many samples drift out of
-# $[0.8,\ 1.2]$, the trust region that **PPO** clips to.
+# Watch two things:
+#
+# 1. **The curve stays almost flat for the first ~200 updates.** REINFORCE learns from
+#    whole-game results, and at the start the agent loses nearly every game. The
+#    batch-mean baseline (the bonus TODO!) is what keeps learning alive here: in a batch
+#    of almost-only losses it gives every loss an advantage near 0 and the rare wins a
+#    huge one — the few wins scream. Without it, this experiment usually never takes off.
+# 2. **Then it takes off.** One threat never beats a blocker — it gets blocked. The only
+#    way to win is to prepare **two threats at once**. Expect somewhere between 40% and
+#    80% wins at the end, depending on training luck.
+#
+# This is the longest run in the notebook — roughly twice the main training.
 
 # %%
-N_BONUS_UPDATES = 8 if FAST else 80
+def oneply_opponent(boards, legal_mask):
+    """The stronger teacher: win if you can, block if you must, otherwise random."""
+    fill = boards.sum(dim=(1, 2))                     # discs per column
+    my_wins = wins_if_played(boards[:, 0], fill)      # columns that win the game right now
+    must_block = wins_if_played(boards[:, 1], fill)   # columns where the opponent wins next
+    actions = random_opponent(boards, legal_mask)
+    can_block = must_block.any(dim=1)
+    actions[can_block] = must_block.float().argmax(dim=1)[can_block]
+    can_win = my_wins.any(dim=1)
+    actions[can_win] = my_wins.float().argmax(dim=1)[can_win]
+    return actions
 
 
-def train_with_reuse(reuse_k, n_updates, n_games=N_GAMES, lr=1e-3, seed=SEED):
-    """The same loop as train(), but each batch is used for reuse_k gradient steps.
+N_STRONG_UPDATES = 8 if FAST else 500
 
-    Also measures the staleness of the data: at every reuse step k we recompute the
-    importance ratio pi_now(a|s) / pi_data(a|s) of the batch's own moves and count
-    how many fall outside PPO's clip range [0.8, 1.2].
-    """
-    set_seed(seed)
-    net = PolicyNet()
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
-    win_rates = []
-    frac_outside_clip = torch.zeros(reuse_k)
-    for update in range(n_updates):
-        batch = play_games(net, n_games, random_opponent, gamma=1.0)
-        log_probs_data = batch.log_probs.detach()    # log pi of the policy that PLAYED
-        for k in range(reuse_k):
-            if k == 0:
-                log_probs = batch.log_probs          # fresh: theta == the policy that played
-            else:
-                # stale reuse: theta has changed, the games have not
-                masked_logits = net(batch.boards, batch.masks)
-                log_probs = Categorical(logits=masked_logits).log_prob(batch.actions)
-            ratio = (log_probs.detach() - log_probs_data).exp()
-            frac_outside_clip[k] += ((ratio - 1).abs() > 0.2).float().mean() / n_updates
-            loss = reinforce_loss(log_probs, batch.G)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        win_rates.append((batch.z > 0).float().mean().item())
-    return win_rates, frac_outside_clip
+set_seed(SEED)
+net_strong = PolicyNet()
+optimizer = torch.optim.Adam(net_strong.parameters(), lr=1e-3)  # a bit higher: wins are rare
+history_strong = {"win_rate": [], "loss": []}
+for update in range(N_STRONG_UPDATES):
+    batch = play_games(net_strong, N_GAMES, oneply_opponent, GAMMA)
+    G = batch.G - batch.G.mean()              # the batch-mean baseline — not optional here
+    loss = reinforce_loss(batch.log_probs, G)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    history_strong["win_rate"].append((batch.z > 0).float().mean().item())
+    history_strong["loss"].append(loss.item())
+    if (update + 1) % PLOT_EVERY == 0 or update + 1 == N_STRONG_UPDATES:
+        update_live_plot(history_strong, target=0.5, ylabel="win rate vs the stronger teacher")
 
-
-curve_k1, _ = train_with_reuse(reuse_k=1, n_updates=N_BONUS_UPDATES)
-print(f"K=1 done, final win rate {np.mean(curve_k1[-10:]):.2f}")
-curve_k5, drift_k5 = train_with_reuse(reuse_k=5, n_updates=N_BONUS_UPDATES)
-print(f"K=5 done, final win rate {np.mean(curve_k5[-10:]):.2f}")
-
-plot_curves({"K = 1 (on-policy)": smoothed(curve_k1), "K = 5 (stale reuse)": smoothed(curve_k5)},
-            ylabel="win rate vs random", title="Reusing each batch K times")
-plt.figure(figsize=(5, 2.5))
-plt.bar(range(1, len(drift_k5) + 1), 100 * drift_k5)
-plt.xlabel("gradient step on the same batch")
-plt.ylabel("% outside PPO clip")
-plt.title("Moves whose importance ratio left [0.8, 1.2]")
-plt.show()
+# %%
+set_seed(SEED)
+for name, opponent in [("stronger teacher", oneply_opponent), ("random", random_opponent)]:
+    stats = evaluate(net_strong, opponent)
+    print(f"vs {name:16s} win {stats['win']:5.1%}   draw {stats['draw']:5.1%}   loss {stats['loss']:5.1%}")
 
 # %% [markdown]
-# Two things to notice:
-#
-# 1. **The data goes stale immediately.** Fresh data sits at ratio = 1 by definition
-#    (step 1 in the bar plot). One gradient step later, a noticeable share of the batch
-#    is already outside the trust region that PPO refuses to step beyond — and REINFORCE
-#    still weights every sample as if the ratio were 1. The gradient is **biased**.
-# 2. **And yet the win-rate curve is not worse — it can even look better** (K gradient
-#    steps per batch of games). That is the scary part: off-policy bias is a *silent*
-#    bug. Connect 4 against a random opponent is so easy that a biased gradient still
-#    points roughly uphill. Against a stronger opponent, or in a harder task, exactly
-#    this bias makes training collapse — with no warning, just like here.
-#
-# The honest fix is to multiply every sample by $\pi_{\text{now}}/\pi_{\text{data}}$
-# (importance sampling, from the lecture) — and to *clip* that ratio near 1 so single
-# stale samples cannot explode the update. That clipped ratio **is the heart of PPO**.
+# Learning against the strict teacher did not cost it the easy game — it still beats
+# random about as often as the original agent. And it has learned something the original
+# never did: to **block**. Your rematch (it is much harder to trap than the agent from
+# Section 6):
+
+# %%
+if HEADLESS:
+    print("(interactive cell — skipped in headless runs)")
+else:
+    play_vs_agent(net_strong)
+
+# %% [markdown]
+# > 🧪 **Why a fresh net — why not continue training our `net`?** We tried it for you:
+# > the already-trained net stays at ~5% against this teacher, forever. Its policy is
+# > almost deterministic, every one of its favourite tricks gets blocked, and without
+# > exploration it never discovers new ones. A fresh random net still explores
+# > everything; the "expert" is trapped in its own habits. The next experiment makes
+# > this exploration story explicit.
 
 # %% [markdown]
 # ### 7b. What if we act greedily *during training*?
@@ -953,6 +971,9 @@ plt.show()
 # Let's find out. The **only** change below is the action rule used in the training games.
 
 # %%
+N_BONUS_UPDATES = 8 if FAST else 80
+
+
 def argmax_in_training(masked_logits):
     """The alternative rule: always the current best move — no exploration."""
     dist = Categorical(logits=masked_logits)
@@ -1035,8 +1056,8 @@ for name, opponent in [("random", random_opponent), ("frozen old self", frozen_o
 # - **Kaggle ConnectX** (https://www.kaggle.com/competitions/connectx) — a running
 #   Connect-4 competition; your agent from today is a valid starting point.
 # - Ideas to try there: a learned baseline $V_\varphi$ (actor-critic), PPO's clipped
-#   importance ratio (Section 7a showed why), opponent pools for self-play, and finally
-#   lookahead search (MCTS) on top of your policy.
+#   importance-sampling ratio (the honest way to reuse old games), opponent pools for
+#   self-play, and finally lookahead search (MCTS) on top of your policy.
 #
 # Thanks for playing — and remember what the loss curve taught you today:
 # *sample during training, argmax during the exam.*

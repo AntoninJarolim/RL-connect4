@@ -200,17 +200,28 @@ Rewards are indexed r_{t+1} in the slides; keep markdown consistent with that.
   unblocked single threats; 1-ply heuristic gets 98%; bridge to MCTS/AlphaZero.
 
 ### Section 7 — Bonus experiments (given, run-only, overflow / take-home)
-- **7a — Batch reuse: "how off-policy do we get?"** `train_with_reuse(reuse_k)` takes K
-  gradient steps per batch and measures the importance ratio π_now/π_data of the batch's
-  own moves at each reuse step, counting samples outside PPO's clip range [0.8, 1.2].
-  Plots: win-rate K=1 vs K=5 (they overlap — deliberately!) + bar chart of % outside the
-  clip range per reuse step. Message: staleness is real and measurable, the bias is
-  SILENT (the curve doesn't warn you here because random is too weak to punish it), and
-  the clipped importance ratio is the heart of PPO.
-  **Design note:** the originally planned "watch reuse destabilize the curve" is
-  EMPIRICALLY FALSE in this env — even 300 gradient steps on one never-refreshed batch
-  reach ~0.87 vs random (verified at K∈{5,8,10,20,25,∞}, lr up to 1e-2, batches 32–256).
-  Do not re-introduce that claim.
+- **7a — A stronger teacher.** Train a FRESH net against `oneply_opponent` ("win if you
+  can, block if you must, else random"; beats random ~96%; built on the `wins_if_played`
+  helper). Settings that matter (all verified):
+  - `lr=1e-3` (5e-4 plateaus ~45% even at 1000 updates), 500 updates, batch 256.
+  - The batch-mean baseline is HARD-CODED as given code (`G - G.mean()`) — without it,
+    seed 0 never takes off (all-loss batches give a uniform push; with the baseline the
+    rare wins get huge advantage). Do not route this through the bonus `advantage()` —
+    it raises NotImplementedError in the skeleton.
+  - Train FROM SCRATCH: warm-starting from the vs-random net stays at ~5% forever
+    (collapsed policy cannot explore) — the section says so in a "we tried it" note.
+  - Measured (seeds 0/1/2): 78%/43%/52% vs the teacher after 500 updates, takeoff around
+    update 200-400 after a long flat start; ~86-94% vs random; blocks far more than the
+    vs-random agent (35 vs 60 missed single blocks per 1000 games). Markdown promises
+    "40-80%, flat start, then takeoff" — keep expectations that wide.
+  - A mixed random/heuristic teacher does NOT work (stays in the vs-random basin, 6%).
+  - Ends with `play_vs_agent(net_strong)` — the fun payoff; ~2x the main training's
+    wall time (the teacher's win/block scan costs extra).
+  **History:** 7a was previously the batch-reuse/importance-ratio experiment; replaced
+  on request. Hard-won knowledge kept for the future: batch reuse does NOT destabilize
+  the win-rate curve in this env — even 300 gradient steps on one never-refreshed batch
+  reach ~0.87 vs random (verified K∈{5,8,10,20,25,∞}, lr up to 1e-2, batches 32-256).
+  The importance-sampling/PPO tie-in now lives in the Section 3 buffer box and 7d text.
 - **7b — Exploration: sampling vs argmax during training.** Same loop, action rule
   swapped via the `choose_action` hook. Argmax jumps to ~0.80 then flatlines; sampling
   overtakes and reaches ~0.90 — exploration/exploitation in one picture; ties to the
