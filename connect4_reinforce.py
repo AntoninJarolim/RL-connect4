@@ -479,7 +479,8 @@ print("✅ TODO 1 looks correct")
 # moves second. For every agent move it stores the board, the legal mask, the action, and
 # $\log \pi_\theta(a \mid s)$ — Section 4 needs that log-probability for the gradient.
 #
-# It calls `sample_action(...)` — which does not exist yet. That is your TODO 2, right below.
+# It calls `sample_action(...)` — which does not exist yet. That is your TODO 2, right
+# after a short note on returns.
 
 # %%
 Rollout = namedtuple("Rollout", "boards masks actions log_probs game_idx G z game_plies")
@@ -534,6 +535,26 @@ def play_games(net, n_games, opponent_fn, gamma, choose_action=None):
 
 
 # %% [markdown]
+# ### Returns: how good was each move?
+#
+# The only reward is the final $z$, so the return of the agent's move number $t$
+# (out of $T$ moves it made in that game) is
+#
+# $$G_t = \gamma^{\,T-t} \cdot z .$$
+#
+# With $\gamma = 1$: every move of a **won** game gets $G = +1$, every move of a **lost**
+# game gets $G = -1$. The final result is credited to *all* moves — delayed reward, just
+# like the Fool's-mate example. (One agent step = our move plus the opponent's reply;
+# the opponent is part of the environment, so we count the agent's own moves.)
+
+# %%
+def compute_returns(move_index, moves_in_game, z, gamma):
+    """Return of each stored move: G = gamma^(moves played after it) * z."""
+    moves_after = (moves_in_game - 1 - move_index).float()
+    return (gamma ** moves_after) * z
+
+
+# %% [markdown]
 # ### 🔧 TODO 2: sample an action
 #
 # **What you write:** two lines — build a `Categorical` distribution from the masked
@@ -554,26 +575,6 @@ def sample_action(masked_logits):
     # https://docs.pytorch.org/docs/2.13/distributions.html
     # (one difference: we have masked LOGITS, so build Categorical(logits=...))
     raise NotImplementedError("TODO 2: sample from the policy")
-
-# %% [markdown]
-# ### Returns: how good was each move?
-#
-# The only reward is the final $z$, so the return of the agent's move number $t$
-# (out of $T$ moves it made in that game) is
-#
-# $$G_t = \gamma^{\,T-t} \cdot z .$$
-#
-# With $\gamma = 1$: every move of a **won** game gets $G = +1$, every move of a **lost**
-# game gets $G = -1$. The final result is credited to *all* moves — delayed reward, just
-# like the Fool's-mate example. (One agent step = our move plus the opponent's reply;
-# the opponent is part of the environment, so we count the agent's own moves.)
-
-# %%
-def compute_returns(move_index, moves_in_game, z, gamma):
-    """Return of each stored move: G = gamma^(moves played after it) * z."""
-    moves_after = (moves_in_game - 1 - move_index).float()
-    return (gamma ** moves_after) * z
-
 
 # %%
 FINGERPRINT_TODO2 = 307207  # pinned by the reference solution
