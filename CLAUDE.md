@@ -217,27 +217,31 @@ Rewards are indexed r_{t+1} in the slides; keep markdown consistent with that.
   - A mixed random/heuristic teacher does NOT work (stays in the vs-random basin, 6%).
   - Ends with `play_vs_agent(net_strong)` — the fun payoff; ~2x the main training's
     wall time (the teacher's win/block scan costs extra).
-  **History:** 7a was previously the batch-reuse/importance-ratio experiment; replaced
-  on request. Hard-won knowledge kept for the future: batch reuse does NOT destabilize
-  the win-rate curve in this env — even 300 gradient steps on one never-refreshed batch
-  reach ~0.87 vs random (verified K∈{5,8,10,20,25,∞}, lr up to 1e-2, batches 32-256).
-  The importance-sampling/PPO tie-in now lives in the Section 3 buffer box and 7d text.
-- **7b — Exploration: sampling vs argmax during training.** Same loop, action rule
-  swapped via the `choose_action` hook. Argmax jumps to ~0.80 then flatlines; sampling
-  overtakes and reaches ~0.90 — exploration/exploitation in one picture; ties to the
-  lecture's "During training: sample" alertblock and to TODO 4.
+- **7b — Batch reuse: "how off-policy do we get?"** `train_with_reuse(reuse_k)` (vs the
+  random opponent, lr 1e-3) takes K gradient steps per batch and measures the importance
+  ratio π_now/π_data of the batch's own moves at each reuse step, counting samples
+  outside PPO's clip range [0.8, 1.2]. Plots: win-rate K=1 vs K=5 (they overlap —
+  deliberately!) + bar chart of % outside the clip per reuse step. Message: staleness is
+  real and measurable, the bias is SILENT (random is too weak to punish it), and the
+  clipped importance ratio is the heart of PPO.
+  **Design note:** "watch reuse destabilize the curve" is EMPIRICALLY FALSE in this env —
+  even 300 gradient steps on one never-refreshed batch reach ~0.87 vs random (verified
+  K∈{5,8,10,20,25,∞}, lr up to 1e-2, batches 32-256). Do not re-introduce that claim.
+- **7c — Exploration: sampling vs argmax during training.** Same loop, action rule
+  swapped via play_games' `choose_action` hook. Argmax jumps to ~0.80 then flatlines;
+  sampling overtakes and reaches ~0.90 — exploration/exploitation in one picture; ties
+  to the lecture's "During training: sample" alertblock, to TODO 4, and to 7a's
+  warm-start failure. Closing markdown carries the AlphaZero-injects-noise fact.
   **Design note:** this replaced the planned γ=0.95 "win fast" experiment: γ has NO
   measurable effect here (mean game length ~10.7 plies for γ∈{0.25..1.0}; the agent
   already wins near-fastest at γ=1, and Adam absorbs return scaling). Verified; do not
   re-introduce a γ experiment without new evidence.
-- **7c — Self-play taste.** Frozen copy of the trained net as opponent (it samples, so
-  it doesn't repeat one game); continue training a copy; evaluate vs random and vs the
-  frozen self. Markdown explains frozen = stationary P. **Measured outcome: the win rate
-  vs the frozen copy stays pinned at 50% (verified up to 320 updates)** — the collapsed
-  policy cannot explore, so self-play from it learns nothing. The section teaches
-  exactly that (link back to 7b; AlphaZero's root noise). Do not promise self-play
-  improvement in the markdown.
 - **7d — Take-home pointer.** Kaggle ConnectX + ideas (V_φ, PPO, opponent pools, MCTS).
+- **Removed: the self-play section** (frozen-copy opponent). Measured and the reason for
+  removal: the win rate vs the frozen copy stays pinned at exactly 50% (verified up to
+  320 updates) — the collapsed policy cannot explore, so self-play from it learns
+  nothing. If it ever returns, do not promise improvement; the non-stationary-P sentence
+  now lives in the Section 5 markdown without a forward reference.
 
 ## Testing requirements (tests/test_env.py)
 

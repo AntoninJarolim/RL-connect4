@@ -489,7 +489,7 @@ def play_games(net, n_games, opponent_fn, gamma, choose_action=None):
     """Play n_games (agent vs opponent_fn) and collect everything REINFORCE needs.
 
     choose_action: how the agent picks a move from the masked logits.
-    Defaults to sample_action, i.e. a ~ pi_theta (Section 7b tries an alternative).
+    Defaults to sample_action, i.e. a ~ pi_theta (Section 7c tries an alternative).
     """
     env = VectorConnect4(n_games)
     agent_player = torch.zeros(n_games, dtype=torch.int64)
@@ -606,9 +606,7 @@ print("✅ TODO 2 looks correct")
 # >
 # > On the lecture's four-way data map we sit at **online + on-policy**. DQN sits at
 # > online + **off**-policy — that is why *it* is allowed to keep a replay buffer.
-# > (There is an honest way for policy gradients to reuse old games: re-weight every
-# > sample by $\pi_{\text{now}}/\pi_{\text{old}}$ — importance sampling. Keeping that
-# > ratio close to 1 is the heart of **PPO**.)
+# > In Section 7b we will reuse batches anyway, and *measure* how off-policy we become.
 
 # %% [markdown]
 # ## 4. The REINFORCE loss
@@ -690,8 +688,8 @@ else:
 #
 # The opponent stays **fixed** (uniformly random over legal columns). A fixed opponent is
 # simply part of the environment, so the MDP stays **stationary** and learning is stable
-# within our time budget. Self-play would change $P$ under our feet — we taste it in
-# Section 7c.
+# within our time budget. Self-play would change $P$ under our feet — a non-stationary
+# MDP, one of the classic self-play headaches. Today, every teacher we use stays fixed.
 #
 # Watch the live plot: the win rate vs random should climb from ~50% to about 90%.
 # The run takes a few minutes on the free CPU runtime.
@@ -960,20 +958,100 @@ else:
 # > the already-trained net stays at ~5% against this teacher, forever. Its policy is
 # > almost deterministic, every one of its favourite tricks gets blocked, and without
 # > exploration it never discovers new ones. A fresh random net still explores
-# > everything; the "expert" is trapped in its own habits. The next experiment makes
-# > this exploration story explicit.
+# > everything; the "expert" is trapped in its own habits. Experiment 7c makes this
+# > exploration story explicit.
 
 # %% [markdown]
-# ### 7b. What if we act greedily *during training*?
+# ### 7b. Reuse each batch K times — how off-policy do we get?
+#
+# DQN keeps a replay buffer, so why can't we? Let's try. The function below is our
+# training loop (back against the random opponent) with one change: each batch is used
+# for `reuse_k` gradient steps before being thrown away. For $k > 1$ the
+# log-probabilities are recomputed under the *current* $\theta$ — but the games were
+# played by an *older* policy. The data is **stale**: we are off-policy, without any
+# correction.
+#
+# "How off-policy" is a measurable number: the **importance ratio**
+# $\pi_{\text{now}}(a \mid s)\,/\,\pi_{\text{data}}(a \mid s)$ from the importance-sampling
+# slide. For fresh on-policy data the ratio is exactly 1 — and the REINFORCE gradient
+# silently *assumes* it is 1. The code below tracks how many samples drift out of
+# $[0.8,\ 1.2]$, the trust region that **PPO** clips to.
+
+# %%
+N_BONUS_UPDATES = 8 if FAST else 80
+
+
+def train_with_reuse(reuse_k, n_updates, n_games=N_GAMES, lr=1e-3, seed=SEED):
+    """The same loop as train(), but each batch is used for reuse_k gradient steps.
+
+    Also measures the staleness of the data: at every reuse step k we recompute the
+    importance ratio pi_now(a|s) / pi_data(a|s) of the batch's own moves and count
+    how many fall outside PPO's clip range [0.8, 1.2].
+    """
+    set_seed(seed)
+    net = PolicyNet()
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    win_rates = []
+    frac_outside_clip = torch.zeros(reuse_k)
+    for update in range(n_updates):
+        batch = play_games(net, n_games, random_opponent, gamma=1.0)
+        log_probs_data = batch.log_probs.detach()    # log pi of the policy that PLAYED
+        for k in range(reuse_k):
+            if k == 0:
+                log_probs = batch.log_probs          # fresh: theta == the policy that played
+            else:
+                # stale reuse: theta has changed, the games have not
+                masked_logits = net(batch.boards, batch.masks)
+                log_probs = Categorical(logits=masked_logits).log_prob(batch.actions)
+            ratio = (log_probs.detach() - log_probs_data).exp()
+            frac_outside_clip[k] += ((ratio - 1).abs() > 0.2).float().mean() / n_updates
+            loss = reinforce_loss(log_probs, batch.G)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        win_rates.append((batch.z > 0).float().mean().item())
+    return win_rates, frac_outside_clip
+
+
+curve_k1, _ = train_with_reuse(reuse_k=1, n_updates=N_BONUS_UPDATES)
+print(f"K=1 done, final win rate {np.mean(curve_k1[-10:]):.2f}")
+curve_k5, drift_k5 = train_with_reuse(reuse_k=5, n_updates=N_BONUS_UPDATES)
+print(f"K=5 done, final win rate {np.mean(curve_k5[-10:]):.2f}")
+
+plot_curves({"K = 1 (on-policy)": smoothed(curve_k1), "K = 5 (stale reuse)": smoothed(curve_k5)},
+            ylabel="win rate vs random", title="Reusing each batch K times")
+plt.figure(figsize=(5, 2.5))
+plt.bar(range(1, len(drift_k5) + 1), 100 * drift_k5)
+plt.xlabel("gradient step on the same batch")
+plt.ylabel("% outside PPO clip")
+plt.title("Moves whose importance ratio left [0.8, 1.2]")
+plt.show()
+
+# %% [markdown]
+# Two things to notice:
+#
+# 1. **The data goes stale immediately.** Fresh data sits at ratio = 1 by definition
+#    (step 1 in the bar plot). One gradient step later, a noticeable share of the batch
+#    is already outside the trust region that PPO refuses to step beyond — and REINFORCE
+#    still weights every sample as if the ratio were 1. The gradient is **biased**.
+# 2. **And yet the win-rate curve is not worse — it can even look better** (K gradient
+#    steps per batch of games). That is the scary part: off-policy bias is a *silent*
+#    bug. Connect 4 against a random opponent is so easy that a biased gradient still
+#    points roughly uphill. Against a stronger opponent, or in a harder task, exactly
+#    this bias makes training collapse — with no warning, just like here.
+#
+# The honest fix is to multiply every sample by $\pi_{\text{now}}/\pi_{\text{data}}$
+# (importance sampling, from the lecture) — and to *clip* that ratio near 1 so single
+# stale samples cannot explode the update. That clipped ratio **is the heart of PPO**.
+
+# %% [markdown]
+# ### 7c. What if we act greedily *during training*?
 #
 # The lecture insists: during training, **sample** — $a_t \sim \pi_\theta(\cdot \mid s_t)$.
 # Would argmax not be better? It always plays the currently-best move, after all.
 # Let's find out. The **only** change below is the action rule used in the training games.
 
 # %%
-N_BONUS_UPDATES = 8 if FAST else 80
-
-
 def argmax_in_training(masked_logits):
     """The alternative rule: always the current best move — no exploration."""
     dist = Categorical(logits=masked_logits)
@@ -1006,49 +1084,12 @@ plot_curves({k: smoothed(v) for k, v in exploration_curves.items()},
 # sampling learner overtakes it for good. That is the exploration–exploitation trade-off
 # in one picture: sampling pays a small price early and buys learning.
 #
+# This is not a toy problem: even AlphaZero injects extra noise into its move selection
+# during self-play, exactly to keep exploration alive. And it is why warm-starting in
+# 7a failed — an almost deterministic policy is a policy that has stopped exploring.
+#
 # (At *inference* time exploration buys nothing — that is why your `greedy_action` from
 # TODO 4 is the right rule for playing, and the wrong rule for learning.)
-
-# %% [markdown]
-# ### 7c. A taste of self-play
-#
-# Random is a weak teacher. Next natural step: play against a **frozen copy** of the
-# trained agent. Frozen, because a live self-play opponent would change the transition
-# function $P$ during training — a non-stationary MDP, one of the classic self-play
-# headaches (AlphaZero-style training has to manage exactly this).
-
-# %%
-net_selfplay = PolicyNet()
-net_selfplay.load_state_dict(net.state_dict())
-frozen = PolicyNet()
-frozen.load_state_dict(net.state_dict())
-
-
-def frozen_opponent(boards, legal_mask):
-    """The frozen copy plays by sampling from its own policy."""
-    with torch.no_grad():
-        actions, _ = sample_action(frozen(boards, legal_mask))
-    return actions
-
-
-set_seed(SEED)
-history_selfplay = train(net_selfplay, frozen_opponent, N_BONUS_UPDATES,
-                         use_baseline=USE_BASELINE, show_plot=False)
-print(f"Win rate vs the frozen copy during training: "
-      f"{np.mean(history_selfplay['win_rate'][:10]):.2f} (first 10 updates) -> "
-      f"{np.mean(history_selfplay['win_rate'][-10:]):.2f} (last 10)")
-print("After self-play training:")
-for name, opponent in [("random", random_opponent), ("frozen old self", frozen_opponent)]:
-    stats = evaluate(net_selfplay, opponent)
-    print(f"vs {name:16s} win {stats['win']:5.1%}   draw {stats['draw']:5.1%}   loss {stats['loss']:5.1%}")
-
-# %% [markdown]
-# Surprised? The win rate against the frozen copy stays pinned at **50% — it learns
-# nothing**. The reason is Section 7b in disguise: after the main training our policy is
-# almost deterministic. Two near-deterministic equals replay near-identical games, no new
-# situations appear, and REINFORCE has nothing to learn from. Self-play only works when
-# exploration is kept **alive** — AlphaZero, for example, injects extra noise into its
-# move selection for exactly this reason.
 
 # %% [markdown]
 # ### 7d. Take-home: keep going
@@ -1056,7 +1097,7 @@ for name, opponent in [("random", random_opponent), ("frozen old self", frozen_o
 # - **Kaggle ConnectX** (https://www.kaggle.com/competitions/connectx) — a running
 #   Connect-4 competition; your agent from today is a valid starting point.
 # - Ideas to try there: a learned baseline $V_\varphi$ (actor-critic), PPO's clipped
-#   importance-sampling ratio (the honest way to reuse old games), opponent pools for
+#   importance-sampling ratio (Section 7b showed why it is needed), opponent pools for
 #   self-play, and finally lookahead search (MCTS) on top of your policy.
 #
 # Thanks for playing — and remember what the loss curve taught you today:
